@@ -12,8 +12,8 @@ const mainTemplate 	= require("../../data/mainTemplate");
 const roomsData 	= require("../../data/roomsData.json");
 
 const companyName 		= config.get("company.name");
-const companyLocation 	= config.get("company.location");
 const seatsFile 		= config.get("files.seats");
+const analytics 		= config.get("analytics");
 
 function getPeople({ token, email }){
 	// Create a Graph client
@@ -27,7 +27,6 @@ function getPeople({ token, email }){
 	return client
 		.api('/me/people')
 		.version("beta")
-		.filter(`companyName eq '${companyName}' and officeLocation eq '${companyLocation}'`)
 		.select("displayName", "givenName", "surname", "title", "companyName", "department", "officeLocation", "phones", "emailAddresses")
 		.header('X-AnchorMailbox', email)
 		.top(1000)
@@ -64,12 +63,13 @@ function serialize(template, users) {
 						<h3 class="content__item-title">${displayName}</h3>
 						<div class="content__item-details">
 							<p class="content__meta">
-								<span class="content__meta-item"><strong>Department:</strong> ${department}</span>
+								<span class="content__meta-item"><strong>${department}</strong> ${title}</span>
 							</p>
-							<p class="content__desc"><strong>Title:</strong> ${title}</p>
-							<p class="content__desc"><strong>Email:</strong> ${email}</p>
-							<p class="content__desc"><strong>Work phone:</strong> ${phone}</p>
-							<p class="content__desc"><strong>Mobile phone:</strong> ${mobile}</p>
+							<ul class="content__desc">
+								<li data-attr="Email:"><a href="mailto:${email}">${email}</a></li>
+								<li data-attr="Ext. Phone:">${phone}</li>
+								<li data-attr="Mobile Phone:">${mobile}</li>
+							</ul>
 						</div>
 					</div>
 				`;
@@ -77,11 +77,13 @@ function serialize(template, users) {
 			case 1:		// meeting room
 				itemHtml = `
 					<div class="content__item" data-space="${space}" data-category="${category}">
-						<h3 class="content__item-title">${displayName}</h3>
+						<h3 class="content__item-title"><span>${space}</span>${displayName}</h3>
 						<div class="content__item-details">
-							<p class="content__meta">
-								<span class="content__meta-item"><strong>Email:</strong> ${email}</span>
-							</p>
+							<ul class="content__desc">
+								<li data-attr="Email:"><a href="mailto:${email}">${email}</a></li>
+								<li data-attr="Room Phone:">+7495 1234623 Ext. 00${space}</li>
+								<li data-attr="Scheduled:"><a target="_blank" href="https://outlook.office365.com/owa/?realm=odin.com&exsvurl=1&ll-cc=1033&modurl=1">Look</a></li>
+							</ul>
 						</div>
 					</div>
 				`;
@@ -89,7 +91,7 @@ function serialize(template, users) {
 			default:
 				itemHtml = `
 					<div class="content__item" data-space="${space}" data-category="${category}">
-						<h3 class="content__item-title">${displayName}</h3>
+						<h3 class="content__item-title"><span>${space}</span>${displayName}</h3>
 						<div class="content__item-details"></div>
 					</div>
 				`;
@@ -97,7 +99,7 @@ function serialize(template, users) {
 
 		listStr += `
 			<li class="list__item" data-level="${space[0]}" data-category="${category}" data-space="${space}">
-				<a href="javascript:void()" class="list__link">${displayName}</a>
+				<a href="javascript:void()" class="list__link"><span>${!category ? "" : space}<i>${email}||${phone}||${department}||${title}</i></span>${displayName}</a>
 			</li>
 		`;
 
@@ -119,25 +121,46 @@ function write(html){
 	});
 }
 
+function normalize(str) {
+	return (str || "").toLowerCase().trim();
+}
+
 router.get('/', async (req, res) => {
 	let indexHTML = mainTemplate;
 	indexHTML = indexHTML.replace(/{COMPANY NAME}/gi, companyName);
 	indexHTML = indexHTML.replace("{MAP}", mapTemplate);
+	indexHTML = indexHTML.replace("{ANALYTICS}", analytics);
 
 	roomsData.sort((a, b) => a.category - b.category);
 
 	try {
 		const { token, email } 	= await authorize(req, res);
+
+		if (!token){
+			console.log("Not authorized");
+			return;
+		}
+
 		const usersData 		= await getPeople({ token, email });
 		const usersSpaces 		= await getSpaces();
 
 		const users = [];
 		usersSpaces.forEach((userSpace) => {
-			let user = usersData.find((userData) => {
-				return userData.givenName === userSpace["First Name"] && userData.surname === userSpace["Last Name"];
-			});
+			let user = usersData.find((userData) => (
+				normalize(userData.displayName) === `${normalize(userSpace["First Name"])} ${normalize(userSpace["Last Name"])}`
+				|| normalize(userData.displayName) === `${normalize(userSpace["First Name"])}, ${normalize(userSpace["Last Name"])}`
+				|| (
+					normalize(userData.givenName) === normalize(userSpace["First Name"])
+					&& normalize(userData.surname) === normalize(userSpace["Last Name"])
+				)
+			));
 
-			if (!user) return;
+			if (!user || !userSpace.Seat) {
+				if (userSpace["Last Name"] !== "Vacant" && userSpace["Last Name"] !== "Архив" && !!userSpace["Last Name"]){
+					console.log(JSON.stringify(userSpace));
+				}
+				return;
+			}
 
 			user.space = userSpace.Seat.toPrecision(4);
 
